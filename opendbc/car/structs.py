@@ -63,6 +63,8 @@ class CarParamsSP:
   intelligentCruiseButtonManagementAvailable: bool = auto_field()
   enableGasInterceptor: bool = auto_field()
 
+  hondaCrvLongitudinalTune: 'CarParamsSP.HondaCrvLongitudinalTune' = field(default_factory=lambda: CarParamsSP.HondaCrvLongitudinalTune())
+
   neuralNetworkLateralControl: 'CarParamsSP.NeuralNetworkLateralControl' = field(default_factory=lambda: CarParamsSP.NeuralNetworkLateralControl())
 
   @auto_dataclass
@@ -74,6 +76,28 @@ class CarParamsSP:
     class Model:
       path: str = auto_field()
       name: str = auto_field()
+
+  @auto_dataclass
+  class HondaCrvLongitudinalTune:
+    enabled: bool = auto_field()
+    tuneId: str = auto_field()
+    revision: int = auto_field()
+    actuatorDelay: float = auto_field()
+    followingTime: float = auto_field()
+    integralBreakpoints: list[float] = auto_field()
+    integralGains: list[float] = auto_field()
+    brakeEntryAccel: float = auto_field()
+    brakeReleaseAccel: float = auto_field()
+    gasEntryAccel: float = auto_field()
+    lowSpeedMax: float = auto_field()
+    launchAccelMax: float = auto_field()
+    closeLeadDistance: float = auto_field()
+    fullLaunchDistance: float = auto_field()
+    closingVRel: float = auto_field()
+    closingTimeGap: float = auto_field()
+    guardReleaseTime: float = auto_field()
+    stopReleaseVRel: float = auto_field()
+    leadProbability: float = auto_field()
 
 
 @auto_dataclass

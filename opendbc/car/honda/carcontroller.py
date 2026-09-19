@@ -9,6 +9,7 @@ from opendbc.car.interfaces import CarControllerBase
 from opendbc.sunnypilot.car.honda.mads import MadsCarController
 from opendbc.sunnypilot.car.honda.gas_interceptor import GasInterceptorCarController
 from opendbc.sunnypilot.car.honda.icbm import IntelligentCruiseButtonManagementInterface
+from opendbc.sunnypilot.car.honda.longitudinal_tuning import CRV_LONGITUDINAL_TUNE
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
 LongCtrlState = structs.CarControl.Actuators.LongControlState
@@ -40,6 +41,23 @@ def longitudinal_control_allowed(control_enabled: bool, long_active: bool,
                                   brake_hold_active: bool) -> bool:
   """Brake hold is a hard inhibit until the vehicle exits the hold state."""
   return control_enabled and long_active and not brake_hold_active
+
+
+def update_crv_bosch_long_mode(accel: float, current_mode: str, active: bool, stopping: bool) -> str:
+  """Select mutually exclusive gas, coast, or brake output for the CR-V."""
+  if not active:
+    return "coast"
+  if stopping:
+    return "brake"
+  if current_mode == "brake":
+    if accel <= CRV_LONGITUDINAL_TUNE.brake_release_accel:
+      return "brake"
+    return "gas" if accel > CRV_LONGITUDINAL_TUNE.gas_entry_accel else "coast"
+  if accel < CRV_LONGITUDINAL_TUNE.brake_entry_accel:
+    return "brake"
+  if current_mode == "gas" and accel > CRV_LONGITUDINAL_TUNE.gas_entry_accel:
+    return "gas"
+  return "gas" if accel > CRV_LONGITUDINAL_TUNE.gas_entry_accel else "coast"
 
 
 # TODO not clear this does anything useful
@@ -114,6 +132,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.apply_brake_last = 0
     self.last_pump_ts = 0.
     self.stopping_counter = 0
+    self.bosch_long_mode = "coast"
 
     self.accel = 0.0
     self.speed = 0.0
@@ -213,17 +232,27 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         ts = self.frame * DT_CTRL
 
         if self.CP.flags & HondaFlags.BOSCH:
+          requested_gas = 0.0
           if brake_hold_active:
             self.accel = 0.0
             self.gas = 0.0
           else:
             self.accel = float(np.clip(accel, self.params.BOSCH_ACCEL_MIN, self.params.BOSCH_ACCEL_MAX))
-            self.gas = float(np.interp(accel, self.params.BOSCH_GAS_LOOKUP_BP, self.params.BOSCH_GAS_LOOKUP_V))
+            requested_gas = float(np.interp(accel, self.params.BOSCH_GAS_LOOKUP_BP, self.params.BOSCH_GAS_LOOKUP_V))
 
           stopping = actuators.longControlState == LongCtrlState.stopping
+          if self.CP.carFingerprint == CAR.HONDA_CRV_5G:
+            self.bosch_long_mode = update_crv_bosch_long_mode(self.accel, self.bosch_long_mode, long_active, stopping)
+            braking = self.bosch_long_mode == "brake"
+            gas_allowed = self.bosch_long_mode == "gas"
+          else:
+            min_gas_accel = self.params.BOSCH_GAS_LOOKUP_BP[0]
+            braking = long_active and self.accel < min_gas_accel
+            gas_allowed = long_active and self.accel > min_gas_accel
+          self.gas = requested_gas if self.CP.carFingerprint != CAR.HONDA_CRV_5G or gas_allowed else 0.0
           self.stopping_counter = self.stopping_counter + 1 if stopping else 0
           can_sends.extend(hondacan.create_acc_commands(self.packer, self.CAN, control_enabled, long_active, self.accel, self.gas,
-                                                        self.stopping_counter, self.CP))
+                                                        braking, gas_allowed, self.stopping_counter, self.CP))
         else:
           apply_brake = np.clip(self.brake_last - wind_brake, 0.0, 1.0)
           apply_brake = int(np.clip(apply_brake * self.params.NIDEC_BRAKE_MAX, 0, self.params.NIDEC_BRAKE_MAX - 1))
