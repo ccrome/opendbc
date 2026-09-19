@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 from collections import defaultdict
 
@@ -5,9 +7,11 @@ from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda.hondacan import CanBus
+from opendbc.car.honda.speed_calibration import CrvSpeedScaleEstimator, control_speed_scale, load_scale, persist_scale
 from opendbc.car.honda.values import CAR, DBC, STEER_THRESHOLD, HondaFlags, CruiseButtons, CruiseSettings, \
                                                  GearShifter, CarControllerParams
 from opendbc.car.interfaces import CarStateBase
+from openpilot.common.params import Params
 
 from opendbc.sunnypilot.car.honda.carstate_ext import CarStateExt
 
@@ -52,6 +56,12 @@ class CarState(CarStateBase, CarStateExt):
     self.dash_speed_seen = False
     self.is_metric = False
     self.v_cruise_factor = 1.
+    self.crv_speed_scale = None
+    self.crv_speed_scale_params = None
+    self.crv_speed_scale_last_update = None
+    if CP.carFingerprint == CAR.HONDA_CRV_5G:
+      self.crv_speed_scale_params = Params()
+      self.crv_speed_scale = CrvSpeedScaleEstimator(load_scale(self.crv_speed_scale_params))
 
   def update(self, can_parsers) -> tuple[structs.CarState, structs.CarStateSP]:
     cp = can_parsers[Bus.pt]
@@ -83,7 +93,25 @@ class CarState(CarStateBase, CarStateExt):
     # STANDSTILL->WHEELS_MOVING bit can be noisy around zero, so use XMISSION_SPEED
     v_wheel = sum([cp.vl["WHEEL_SPEEDS"][f"WHEEL_SPEED_{s}"] for s in ("FL", "FR", "RL", "RR")]) / 4.0 * CV.KPH_TO_MS
     v_weight = float(np.interp(v_wheel, v_weight_bp, v_weight_v))
-    ret.vEgoRaw = (1. - v_weight) * cp.vl["ENGINE_DATA"]["XMISSION_SPEED"] * CV.KPH_TO_MS * self.CP.wheelSpeedFactor + v_weight * v_wheel
+    unscaled_v_ego = (1. - v_weight) * cp.vl["ENGINE_DATA"]["XMISSION_SPEED"] * CV.KPH_TO_MS * self.CP.wheelSpeedFactor + v_weight * v_wheel
+
+    cluster_speed = 0.0
+    if self.CP.carFingerprint not in (CAR.HONDA_ODYSSEY_TWN,):
+      self.dash_speed_seen = self.dash_speed_seen or cp.vl["CAR_SPEED"]["ROUGH_CAR_SPEED_2"] > 1e-3
+      if self.dash_speed_seen:
+        conversion = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
+        cluster_speed = cp.vl["CAR_SPEED"]["ROUGH_CAR_SPEED_2"] * conversion
+
+    speed_scale = 1.0
+    if self.crv_speed_scale is not None:
+      now = time.monotonic()
+      dt = 0.0 if self.crv_speed_scale_last_update is None else now - self.crv_speed_scale_last_update
+      self.crv_speed_scale_last_update = now
+      self.crv_speed_scale.update(unscaled_v_ego, cluster_speed, dt)
+      persist_scale(self.crv_speed_scale_params, self.crv_speed_scale, now)
+      speed_scale = control_speed_scale(unscaled_v_ego, self.crv_speed_scale.scale)
+
+    ret.vEgoRaw = unscaled_v_ego * speed_scale
     ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
     ret.standstill = cp.vl["ENGINE_DATA"]["XMISSION_SPEED"] < 1e-5
 
@@ -140,11 +168,8 @@ class CarState(CarStateBase, CarStateExt):
 
     ret.espDisabled = cp.vl["VSA_STATUS"]["ESP_DISABLED"] != 0
 
-    if self.CP.carFingerprint not in (CAR.HONDA_ODYSSEY_TWN,):
-      self.dash_speed_seen = self.dash_speed_seen or cp.vl["CAR_SPEED"]["ROUGH_CAR_SPEED_2"] > 1e-3
-      if self.dash_speed_seen:
-        conversion = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
-        ret.vEgoCluster = cp.vl["CAR_SPEED"]["ROUGH_CAR_SPEED_2"] * conversion
+    if self.dash_speed_seen:
+      ret.vEgoCluster = cluster_speed
 
     ret.steeringAngleDeg = cp.vl["STEERING_SENSORS"]["STEER_ANGLE"]
     ret.steeringRateDeg = cp.vl["STEERING_SENSORS"]["STEER_ANGLE_RATE"]
