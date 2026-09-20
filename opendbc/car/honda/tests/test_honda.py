@@ -9,6 +9,10 @@ from opendbc.car.honda.values import CAR, DBC, HondaFlags
 
 
 class TestHondaFingerprint(unittest.TestCase):
+  def test_crv_bosch_actuator_delay_matches_speed_regulation_calibration(self):
+    cp = CarInterface.get_non_essential_params(CAR.HONDA_CRV_5G)
+    self.assertAlmostEqual(cp.longitudinalActuatorDelay, 0.8)
+
   def test_tja_bosch_only(self):
     for car_model in CAR:
       if car_model.config.flags & HondaFlags.BOSCH_TJA_CONTROL:
