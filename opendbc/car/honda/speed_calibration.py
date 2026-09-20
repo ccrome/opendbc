@@ -13,10 +13,6 @@ BATCH_DURATION = 30.0  # seconds of eligible driving
 TIME_CONSTANT = 5.0 * 60.0  # seconds of eligible driving
 PERSIST_INTERVAL = 5.0 * 60.0  # seconds of wall time
 PERSIST_DELTA = 1e-4
-APPLY_START_SPEED = 5.0  # m/s
-APPLY_FULL_SPEED = 10.0  # m/s
-
-
 def clamp_scale(value: float) -> float:
   return max(MIN_SCALE, min(MAX_SCALE, value))
 
@@ -30,14 +26,8 @@ def load_scale(params) -> float:
 
 
 def control_speed_scale(unscaled_speed: float, learned_scale: float) -> float:
-  """Blend in the correction above low-speed stop-and-go operation."""
-  learned_scale = clamp_scale(learned_scale)
-  if unscaled_speed <= APPLY_START_SPEED:
-    return 1.0
-  if unscaled_speed >= APPLY_FULL_SPEED:
-    return learned_scale
-  fraction = (unscaled_speed - APPLY_START_SPEED) / (APPLY_FULL_SPEED - APPLY_START_SPEED)
-  return 1.0 + fraction * (learned_scale - 1.0)
+  """Return the learned correction for the CR-V speed estimate at every speed."""
+  return clamp_scale(learned_scale)
 
 
 class CrvSpeedScaleEstimator:

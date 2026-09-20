@@ -58,12 +58,10 @@ class TestCrvSpeedCalibration(unittest.TestCase):
     self.assertEqual(estimator.scale, 1.0)
     self.assertEqual(CrvSpeedScaleEstimator(2.0).scale, MAX_SCALE)
 
-  def test_scale_is_not_applied_at_stop_and_go_speeds(self):
+  def test_scale_is_applied_at_all_speeds(self):
     learned_scale = 1.036
-    self.assertEqual(control_speed_scale(0.0, learned_scale), 1.0)
-    self.assertEqual(control_speed_scale(5.0, learned_scale), 1.0)
-    self.assertEqual(control_speed_scale(10.0, learned_scale), learned_scale)
-    self.assertAlmostEqual(control_speed_scale(7.5, learned_scale), 1.018)
+    for speed in (0.0, 1.0, 5.0, 10.0, 30.0):
+      self.assertEqual(control_speed_scale(speed, learned_scale), learned_scale)
 
   def test_persistence_is_rate_limited(self):
     estimator = CrvSpeedScaleEstimator()
