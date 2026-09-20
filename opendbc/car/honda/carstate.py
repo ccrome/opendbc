@@ -63,6 +63,28 @@ class CarState(CarStateBase, CarStateExt):
       self.crv_speed_scale_params = Params()
       self.crv_speed_scale = CrvSpeedScaleEstimator(load_scale(self.crv_speed_scale_params))
 
+  def _get_cluster_speed(self, cp) -> float:
+    if self.CP.carFingerprint in (CAR.HONDA_ODYSSEY_TWN,):
+      return 0.0
+
+    self.dash_speed_seen = self.dash_speed_seen or cp.vl["CAR_SPEED"]["ROUGH_CAR_SPEED_2"] > 1e-3
+    if not self.dash_speed_seen:
+      return 0.0
+
+    conversion = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
+    return cp.vl["CAR_SPEED"]["ROUGH_CAR_SPEED_2"] * conversion
+
+  def _apply_crv_speed_scale(self, unscaled_v_ego: float, cluster_speed: float) -> float:
+    if self.crv_speed_scale is None:
+      return unscaled_v_ego
+
+    now = time.monotonic()
+    dt = 0.0 if self.crv_speed_scale_last_update is None else now - self.crv_speed_scale_last_update
+    self.crv_speed_scale_last_update = now
+    self.crv_speed_scale.update(unscaled_v_ego, cluster_speed, dt)
+    persist_scale(self.crv_speed_scale_params, self.crv_speed_scale, now)
+    return unscaled_v_ego * control_speed_scale(unscaled_v_ego, self.crv_speed_scale.scale)
+
   def update(self, can_parsers) -> tuple[structs.CarState, structs.CarStateSP]:
     cp = can_parsers[Bus.pt]
     cp_cam = can_parsers[Bus.cam]
@@ -95,23 +117,8 @@ class CarState(CarStateBase, CarStateExt):
     v_weight = float(np.interp(v_wheel, v_weight_bp, v_weight_v))
     unscaled_v_ego = (1. - v_weight) * cp.vl["ENGINE_DATA"]["XMISSION_SPEED"] * CV.KPH_TO_MS * self.CP.wheelSpeedFactor + v_weight * v_wheel
 
-    cluster_speed = 0.0
-    if self.CP.carFingerprint not in (CAR.HONDA_ODYSSEY_TWN,):
-      self.dash_speed_seen = self.dash_speed_seen or cp.vl["CAR_SPEED"]["ROUGH_CAR_SPEED_2"] > 1e-3
-      if self.dash_speed_seen:
-        conversion = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
-        cluster_speed = cp.vl["CAR_SPEED"]["ROUGH_CAR_SPEED_2"] * conversion
-
-    speed_scale = 1.0
-    if self.crv_speed_scale is not None:
-      now = time.monotonic()
-      dt = 0.0 if self.crv_speed_scale_last_update is None else now - self.crv_speed_scale_last_update
-      self.crv_speed_scale_last_update = now
-      self.crv_speed_scale.update(unscaled_v_ego, cluster_speed, dt)
-      persist_scale(self.crv_speed_scale_params, self.crv_speed_scale, now)
-      speed_scale = control_speed_scale(unscaled_v_ego, self.crv_speed_scale.scale)
-
-    ret.vEgoRaw = unscaled_v_ego * speed_scale
+    cluster_speed = self._get_cluster_speed(cp)
+    ret.vEgoRaw = self._apply_crv_speed_scale(unscaled_v_ego, cluster_speed)
     ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
     ret.standstill = cp.vl["ENGINE_DATA"]["XMISSION_SPEED"] < 1e-5
 
