@@ -38,3 +38,20 @@ class TestHondaFingerprint(unittest.TestCase):
     assert parser.vl['ACC_CONTROL']['ACCEL_COMMAND'] == 0.0
     assert parser.vl['ACC_CONTROL']['GAS_COMMAND'] == -30000.0
     assert parser.vl['ACC_CONTROL_ON']['CONTROL_ON'] == 0.0
+
+  def test_negative_accel_never_becomes_gas_command(self):
+    cp = CarInterface.get_non_essential_params(CAR.HONDA_CRV_5G)
+    can = CanBus(cp)
+    packer = CANPacker(DBC[CAR.HONDA_CRV_5G][Bus.pt])
+    parser = CANParser(DBC[CAR.HONDA_CRV_5G][Bus.pt], [('ACC_CONTROL', 0)], can.pt)
+
+    for accel in (-0.21, -0.20, -0.19, -0.01):
+      messages = create_acc_commands(packer, can, True, True, accel, 100.0, 0, cp)
+      parser.update([(1_000_000_000, messages)])
+      assert parser.vl['ACC_CONTROL']['BRAKE_REQUEST'] == 1
+      assert parser.vl['ACC_CONTROL']['GAS_COMMAND'] == -30000.0
+
+    messages = create_acc_commands(packer, can, True, True, 0.01, 100.0, 0, cp)
+    parser.update([(1_000_000_001, messages)])
+    assert parser.vl['ACC_CONTROL']['BRAKE_REQUEST'] == 0
+    assert parser.vl['ACC_CONTROL']['GAS_COMMAND'] == 100.0

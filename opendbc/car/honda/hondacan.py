@@ -1,6 +1,6 @@
 from opendbc.car import CanBusBase
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.honda.values import (HondaFlags, HONDA_BOSCH_ALT_RADAR, CarControllerParams)
+from opendbc.car.honda.values import (HondaFlags, HONDA_BOSCH_ALT_RADAR)
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 
 # CAN bus layout with relay
@@ -78,12 +78,13 @@ def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_ca
 
 def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_counter, CP):
   commands = []
-  min_gas_accel = CarControllerParams.BOSCH_GAS_LOOKUP_BP[0]
-
   control_on = 5 if enabled else 0
-  gas_command = gas if active and accel > min_gas_accel else -30000
+  # The lower gas lookup breakpoint is for interpolation, not a mode switch.
+  # A negative acceleration request must not be converted into throttle just
+  # because it is above that breakpoint.
+  gas_command = gas if active and accel >= 0.0 else -30000
   accel_command = accel if active else 0
-  braking = 1 if active and accel < min_gas_accel else 0
+  braking = 1 if active and accel < 0.0 else 0
   standstill = 1 if active and stopping_counter > 0 else 0
   standstill_release = 1 if active and stopping_counter == 0 else 0
 
