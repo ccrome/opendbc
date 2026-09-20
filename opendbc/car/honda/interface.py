@@ -87,6 +87,10 @@ class CarInterface(CarInterfaceBase):
 
     if ret.flags & HondaFlags.BOSCH:
       ret.longitudinalActuatorDelay = 0.5 # s
+      if candidate == CAR.HONDA_CRV_5G:
+        # Baseline CR-V logs show 0.7--1.6 s command-to-acceleration delay.
+        # Use the conservative starting calibration for speed regulation.
+        ret.longitudinalActuatorDelay = 0.8 # s
       if ret.flags & HondaFlags.BOSCH_RADARLESS:
         ret.stopAccel = CarControllerParams.BOSCH_ACCEL_MIN  # stock uses -4.0 m/s^2 once stopped but limited by safety model
     else:
