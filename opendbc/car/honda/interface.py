@@ -91,6 +91,12 @@ class CarInterface(CarInterfaceBase):
         # Baseline CR-V logs show 0.7--1.6 s command-to-acceleration delay.
         # Use the conservative starting calibration for speed regulation.
         ret.longitudinalActuatorDelay = 0.8 # s
+        # Low-speed braking can undershoot because the vehicle's creep force is
+        # not represented by the feed-forward acceleration request. Add a
+        # small, speed-tapered integral correction with the PID's existing
+        # output limits and anti-windup protection.
+        ret.longitudinalTuning.kiBP = [0., 5.]
+        ret.longitudinalTuning.kiV = [0.05, 0.]
       if ret.flags & HondaFlags.BOSCH_RADARLESS:
         ret.stopAccel = CarControllerParams.BOSCH_ACCEL_MIN  # stock uses -4.0 m/s^2 once stopped but limited by safety model
     else:
