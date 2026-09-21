@@ -1,7 +1,14 @@
+import numpy as np
+
 from opendbc.car import CanBusBase
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.honda.values import (HondaFlags, HONDA_BOSCH_ALT_RADAR, CarControllerParams)
+from opendbc.car.honda.values import (CAR, HondaFlags, HONDA_BOSCH_ALT_RADAR, CarControllerParams)
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
+
+
+CRV_GAS_BRAKE_ACCEL = -0.20
+CRV_BRAKE_RELEASE_ACCEL = 0.0
+CRV_GAS_RAMP_TIME = 0.4
 
 # CAN bus layout with relay
 # 0 = ACC-CAN - radar side
@@ -76,14 +83,43 @@ def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_ca
   return packer.make_can_msg("BRAKE_COMMAND", CAN.pt, values)
 
 
-def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_counter, CP):
-  commands = []
-  min_gas_accel = CarControllerParams.BOSCH_GAS_LOOKUP_BP[0]
+def crv_brake_handoff(accel, previous_brake, active):
+  """Prevent small request noise from repeatedly changing gas/brake mode."""
+  if not active:
+    return False
+  threshold = CRV_BRAKE_RELEASE_ACCEL if previous_brake else CRV_GAS_BRAKE_ACCEL
+  return accel < threshold
 
+
+def crv_gas_handoff(accel, gas, previous_command, gas_active, active, dt, braking=False):
+  """Keep CR-V gas continuous until braking is actually requested."""
+  if not active or braking:
+    return 0.0, False
+
+  gas_active = True
+  # A zero lookup result is the weak-request region, not a request to switch
+  # modes. Keep the active gas command continuous until braking is selected.
+  target = gas if gas > 0.0 else previous_command
+  ramp = max(1.0, 1600.0 / CRV_GAS_RAMP_TIME * dt)
+  command = float(np.clip(target, previous_command - ramp, previous_command + ramp))
+  return command, gas_active
+
+
+def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_counter, CP, gas_command=None, brake_active=None):
+  commands = []
   control_on = 5 if enabled else 0
-  gas_command = gas if active and accel > min_gas_accel else -30000
+  if CP.carFingerprint == CAR.HONDA_CRV_5G:
+    brake_requested = accel < CRV_GAS_BRAKE_ACCEL if brake_active is None else brake_active
+    if gas_command is None:
+      gas_allowed = accel > 0.05
+      gas_command = gas if active and gas_allowed else -30000
+  else:
+    min_gas_accel = CarControllerParams.BOSCH_GAS_LOOKUP_BP[0]
+    brake_requested = accel < min_gas_accel
+    gas_allowed = accel > min_gas_accel
+    gas_command = gas if active and gas_allowed else -30000
   accel_command = accel if active else 0
-  braking = 1 if active and accel < min_gas_accel else 0
+  braking = int(active and brake_requested)
   standstill = 1 if active and stopping_counter > 0 else 0
   standstill_release = 1 if active and stopping_counter == 0 else 0
 
