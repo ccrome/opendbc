@@ -6,7 +6,8 @@ from opendbc.car.honda.values import (CAR, HondaFlags, HONDA_BOSCH_ALT_RADAR, Ca
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 
 
-CRV_GAS_BRAKE_ACCEL = -0.05
+CRV_GAS_BRAKE_ACCEL = -0.20
+CRV_BRAKE_RELEASE_ACCEL = 0.0
 CRV_GAS_RAMP_TIME = 0.4
 
 # CAN bus layout with relay
@@ -82,23 +83,33 @@ def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_ca
   return packer.make_can_msg("BRAKE_COMMAND", CAN.pt, values)
 
 
-def crv_gas_handoff(accel, gas, previous_command, gas_active, active, dt):
+def crv_brake_handoff(accel, previous_brake, active):
+  """Prevent small request noise from repeatedly changing gas/brake mode."""
+  if not active:
+    return False
+  threshold = CRV_BRAKE_RELEASE_ACCEL if previous_brake else CRV_GAS_BRAKE_ACCEL
+  return accel < threshold
+
+
+def crv_gas_handoff(accel, gas, previous_command, gas_active, active, dt, braking=False):
   """Keep CR-V gas continuous until braking is actually requested."""
-  if not active or accel < CRV_GAS_BRAKE_ACCEL:
+  if not active or braking:
     return 0.0, False
 
   gas_active = True
-  target = gas
+  # A zero lookup result is the weak-request region, not a request to switch
+  # modes. Keep the active gas command continuous until braking is selected.
+  target = gas if gas > 0.0 else previous_command
   ramp = max(1.0, 1600.0 / CRV_GAS_RAMP_TIME * dt)
   command = float(np.clip(target, previous_command - ramp, previous_command + ramp))
   return command, gas_active
 
 
-def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_counter, CP, gas_command=None):
+def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_counter, CP, gas_command=None, brake_active=None):
   commands = []
   control_on = 5 if enabled else 0
   if CP.carFingerprint == CAR.HONDA_CRV_5G:
-    brake_requested = accel < CRV_GAS_BRAKE_ACCEL
+    brake_requested = accel < CRV_GAS_BRAKE_ACCEL if brake_active is None else brake_active
     if gas_command is None:
       gas_allowed = accel > 0.05
       gas_command = gas if active and gas_allowed else -30000

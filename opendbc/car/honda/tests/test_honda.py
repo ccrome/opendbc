@@ -3,7 +3,7 @@ import unittest
 from opendbc.can import CANPacker, CANParser
 from opendbc.car import Bus
 from opendbc.car.honda.carcontroller import longitudinal_control_allowed
-from opendbc.car.honda.hondacan import CanBus, create_acc_commands, crv_gas_handoff
+from opendbc.car.honda.hondacan import CanBus, create_acc_commands, crv_brake_handoff, crv_gas_handoff
 from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR, DBC, HondaFlags
 
@@ -45,10 +45,15 @@ class TestHondaFingerprint(unittest.TestCase):
     packer = CANPacker(DBC[CAR.HONDA_CRV_5G][Bus.pt])
     parser = CANParser(DBC[CAR.HONDA_CRV_5G][Bus.pt], [('ACC_CONTROL', 0)], can.pt)
 
-    for accel in (-0.21, -0.20, -0.19, -0.06):
+    for accel in (-0.21,):
       messages = create_acc_commands(packer, can, True, True, accel, 100.0, 0, cp)
       parser.update([(1_000_000_000, messages)])
       assert parser.vl['ACC_CONTROL']['BRAKE_REQUEST'] == 1
+
+    for accel in (-0.19, -0.06):
+      messages = create_acc_commands(packer, can, True, True, accel, 100.0, 0, cp)
+      parser.update([(1_000_000_000, messages)])
+      assert parser.vl['ACC_CONTROL']['BRAKE_REQUEST'] == 0
       assert parser.vl['ACC_CONTROL']['GAS_COMMAND'] == -30000.0
 
     for accel in (-0.05, 0.0, 0.05):
@@ -79,6 +84,12 @@ class TestHondaFingerprint(unittest.TestCase):
 
     # Safety braking clears gas at once and leaves the brake decision to
     # create_acc_commands.
-    command, gas_active = crv_gas_handoff(-0.06, 0.0, command, gas_active, True, 0.02)
+    command, gas_active = crv_gas_handoff(-0.06, 0.0, command, gas_active, True, 0.02, braking=True)
     assert command == 0.0
     assert not gas_active
+
+  def test_crv_brake_handoff_has_release_hysteresis(self):
+    assert crv_brake_handoff(-0.21, False, True)
+    assert crv_brake_handoff(-0.01, True, True)
+    assert crv_brake_handoff(0.03, True, True) is False
+    assert crv_brake_handoff(-0.01, False, True) is False

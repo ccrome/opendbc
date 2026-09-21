@@ -116,6 +116,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.stopping_counter = 0
     self.crv_gas_command = 0.0
     self.crv_gas_active = False
+    self.crv_brake_active = False
 
     self.accel = 0.0
     self.speed = 0.0
@@ -226,12 +227,15 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           self.stopping_counter = self.stopping_counter + 1 if stopping else 0
           crv_gas_command = None
           if self.CP.carFingerprint == CAR.HONDA_CRV_5G:
+            self.crv_brake_active = hondacan.crv_brake_handoff(
+              self.accel, self.crv_brake_active, long_active)
             self.crv_gas_command, self.crv_gas_active = hondacan.crv_gas_handoff(
               self.accel, self.gas, self.crv_gas_command, self.crv_gas_active,
-              long_active, DT_CTRL * 2)
+              long_active, DT_CTRL * 2, self.crv_brake_active)
             crv_gas_command = self.crv_gas_command if self.crv_gas_command > 0.0 else -30000
           can_sends.extend(hondacan.create_acc_commands(self.packer, self.CAN, control_enabled, long_active, self.accel, self.gas,
-                                                        self.stopping_counter, self.CP, crv_gas_command))
+                                                        self.stopping_counter, self.CP, crv_gas_command,
+                                                        self.crv_brake_active if self.CP.carFingerprint == CAR.HONDA_CRV_5G else None))
         else:
           apply_brake = np.clip(self.brake_last - wind_brake, 0.0, 1.0)
           apply_brake = int(np.clip(apply_brake * self.params.NIDEC_BRAKE_MAX, 0, self.params.NIDEC_BRAKE_MAX - 1))
