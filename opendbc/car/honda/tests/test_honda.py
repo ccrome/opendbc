@@ -70,18 +70,15 @@ class TestHondaFingerprint(unittest.TestCase):
     assert gas_active
     assert command > 0.0
 
-    # Small zero-crossings keep the gas handoff alive instead of selecting
-    # coast immediately on every controller update.
-    for accel in (0.02, -0.01, 0.04, 0.01):
+    # Mild negative requests still use the continuous gas mapping instead of
+    # switching to the coast sentinel.
+    for accel in (0.02, -0.01, -0.03, 0.04, 0.01):
       command, gas_active = crv_gas_handoff(accel, 120.0, command, gas_active, True, 0.02)
       assert gas_active
       assert command > 0.0
 
-    # A sustained release ramps gas down, while safety braking clears it at
-    # once and leaves the brake decision to create_acc_commands.
-    command, gas_active = crv_gas_handoff(-0.03, 0.0, command, gas_active, True, 0.02)
-    assert not gas_active
-    assert command > 0.0
+    # Safety braking clears gas at once and leaves the brake decision to
+    # create_acc_commands.
     command, gas_active = crv_gas_handoff(-0.06, 0.0, command, gas_active, True, 0.02)
     assert command == 0.0
     assert not gas_active

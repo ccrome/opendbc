@@ -6,8 +6,6 @@ from opendbc.car.honda.values import (CAR, HondaFlags, HONDA_BOSCH_ALT_RADAR, Ca
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 
 
-CRV_GAS_ENTER_ACCEL = 0.08
-CRV_GAS_EXIT_ACCEL = -0.02
 CRV_GAS_BRAKE_ACCEL = -0.05
 CRV_GAS_RAMP_TIME = 0.4
 
@@ -85,16 +83,12 @@ def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_ca
 
 
 def crv_gas_handoff(accel, gas, previous_command, gas_active, active, dt):
-  """Blend CR-V gas authority across small acceleration zero-crossings."""
+  """Keep CR-V gas continuous until braking is actually requested."""
   if not active or accel < CRV_GAS_BRAKE_ACCEL:
     return 0.0, False
 
-  if gas_active and accel < CRV_GAS_EXIT_ACCEL:
-    gas_active = False
-  elif not gas_active and accel > CRV_GAS_ENTER_ACCEL:
-    gas_active = True
-
-  target = gas if gas_active else 0.0
+  gas_active = True
+  target = gas
   ramp = max(1.0, 1600.0 / CRV_GAS_RAMP_TIME * dt)
   command = float(np.clip(target, previous_command - ramp, previous_command + ramp))
   return command, gas_active
