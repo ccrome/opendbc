@@ -3,7 +3,7 @@ import unittest
 from opendbc.can import CANPacker, CANParser
 from opendbc.car import Bus
 from opendbc.car.honda.carcontroller import longitudinal_control_allowed
-from opendbc.car.honda.hondacan import CanBus, create_acc_commands
+from opendbc.car.honda.hondacan import CanBus, create_acc_commands, crv_gas_handoff
 from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR, DBC, HondaFlags
 
@@ -61,3 +61,27 @@ class TestHondaFingerprint(unittest.TestCase):
     parser.update([(1_000_000_001, messages)])
     assert parser.vl['ACC_CONTROL']['BRAKE_REQUEST'] == 0
     assert parser.vl['ACC_CONTROL']['GAS_COMMAND'] == 100.0
+
+  def test_crv_gas_handoff_blends_zero_crossings(self):
+    command = 0.0
+    gas_active = False
+
+    command, gas_active = crv_gas_handoff(0.10, 1000.0, command, gas_active, True, 0.02)
+    assert gas_active
+    assert command > 0.0
+
+    # Small zero-crossings keep the gas handoff alive instead of selecting
+    # coast immediately on every controller update.
+    for accel in (0.02, -0.01, 0.04, 0.01):
+      command, gas_active = crv_gas_handoff(accel, 120.0, command, gas_active, True, 0.02)
+      assert gas_active
+      assert command > 0.0
+
+    # A sustained release ramps gas down, while safety braking clears it at
+    # once and leaves the brake decision to create_acc_commands.
+    command, gas_active = crv_gas_handoff(-0.03, 0.0, command, gas_active, True, 0.02)
+    assert not gas_active
+    assert command > 0.0
+    command, gas_active = crv_gas_handoff(-0.06, 0.0, command, gas_active, True, 0.02)
+    assert command == 0.0
+    assert not gas_active

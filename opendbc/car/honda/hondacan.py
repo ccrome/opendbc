@@ -1,7 +1,15 @@
+import numpy as np
+
 from opendbc.car import CanBusBase
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda.values import (CAR, HondaFlags, HONDA_BOSCH_ALT_RADAR, CarControllerParams)
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
+
+
+CRV_GAS_ENTER_ACCEL = 0.08
+CRV_GAS_EXIT_ACCEL = -0.02
+CRV_GAS_BRAKE_ACCEL = -0.05
+CRV_GAS_RAMP_TIME = 0.4
 
 # CAN bus layout with relay
 # 0 = ACC-CAN - radar side
@@ -76,19 +84,35 @@ def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_ca
   return packer.make_can_msg("BRAKE_COMMAND", CAN.pt, values)
 
 
-def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_counter, CP):
+def crv_gas_handoff(accel, gas, previous_command, gas_active, active, dt):
+  """Blend CR-V gas authority across small acceleration zero-crossings."""
+  if not active or accel < CRV_GAS_BRAKE_ACCEL:
+    return 0.0, False
+
+  if gas_active and accel < CRV_GAS_EXIT_ACCEL:
+    gas_active = False
+  elif not gas_active and accel > CRV_GAS_ENTER_ACCEL:
+    gas_active = True
+
+  target = gas if gas_active else 0.0
+  ramp = max(1.0, 1600.0 / CRV_GAS_RAMP_TIME * dt)
+  command = float(np.clip(target, previous_command - ramp, previous_command + ramp))
+  return command, gas_active
+
+
+def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_counter, CP, gas_command=None):
   commands = []
   control_on = 5 if enabled else 0
   if CP.carFingerprint == CAR.HONDA_CRV_5G:
-    # Keep a coast band around zero. The lower gas lookup breakpoint is for
-    # interpolation, not a brake/gas mode switch.
-    brake_requested = accel < -0.05
-    gas_allowed = accel > 0.05
+    brake_requested = accel < CRV_GAS_BRAKE_ACCEL
+    if gas_command is None:
+      gas_allowed = accel > 0.05
+      gas_command = gas if active and gas_allowed else -30000
   else:
     min_gas_accel = CarControllerParams.BOSCH_GAS_LOOKUP_BP[0]
     brake_requested = accel < min_gas_accel
     gas_allowed = accel > min_gas_accel
-  gas_command = gas if active and gas_allowed else -30000
+    gas_command = gas if active and gas_allowed else -30000
   accel_command = accel if active else 0
   braking = int(active and brake_requested)
   standstill = 1 if active and stopping_counter > 0 else 0
