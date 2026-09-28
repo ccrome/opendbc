@@ -1,7 +1,10 @@
 import math
 import unittest
 
-from opendbc.car.honda.speed_calibration import BATCH_DURATION, MAX_SCALE, MIN_SCALE, TIME_CONSTANT, CrvSpeedScaleEstimator, control_speed_scale, load_scale, persist_scale
+from opendbc.car.honda.speed_calibration import (
+  BATCH_DURATION, MAX_SCALE, MIN_SCALE, TIME_CONSTANT, CrvSpeedScaleEstimator,
+  control_speed_scale, load_scale, persist_scale,
+)
 
 
 class FakeParams:
