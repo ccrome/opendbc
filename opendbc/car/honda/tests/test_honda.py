@@ -53,10 +53,10 @@ class TestHondaFingerprint(unittest.TestCase):
     for accel in (-0.19, -0.06):
       messages = create_acc_commands(packer, can, True, True, accel, 100.0, 0, cp)
       parser.update([(1_000_000_000, messages)])
-      assert parser.vl['ACC_CONTROL']['BRAKE_REQUEST'] == 0
+      assert parser.vl['ACC_CONTROL']['BRAKE_REQUEST'] == 1
       assert parser.vl['ACC_CONTROL']['GAS_COMMAND'] == -30000.0
 
-    for accel in (-0.05, 0.0, 0.05):
+    for accel in (0.0, 0.05):
       messages = create_acc_commands(packer, can, True, True, accel, 100.0, 0, cp)
       parser.update([(1_000_000_001, messages)])
       assert parser.vl['ACC_CONTROL']['BRAKE_REQUEST'] == 0
@@ -88,8 +88,14 @@ class TestHondaFingerprint(unittest.TestCase):
     assert command == 0.0
     assert not gas_active
 
-  def test_crv_brake_handoff_has_release_hysteresis(self):
+  def test_crv_brake_handoff_uses_continuous_effort_origin(self):
     assert crv_brake_handoff(-0.21, False, True)
     assert crv_brake_handoff(-0.01, True, True)
     assert crv_brake_handoff(0.03, True, True) is False
-    assert crv_brake_handoff(-0.01, False, True) is False
+    assert crv_brake_handoff(-0.01, False, True)
+
+  def test_crv_zero_effort_releases_stale_gas(self):
+    command = 800.0
+    for _ in range(20):
+      command, _ = crv_gas_handoff(0.0, 0.0, command, True, True, 0.02)
+    assert command == 0.0

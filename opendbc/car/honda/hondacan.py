@@ -6,7 +6,7 @@ from opendbc.car.honda.values import (CAR, HondaFlags, HONDA_BOSCH_ALT_RADAR, Ca
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 
 
-CRV_GAS_BRAKE_ACCEL = -0.20
+CRV_GAS_BRAKE_ACCEL = 0.0
 CRV_BRAKE_RELEASE_ACCEL = 0.0
 CRV_GAS_RAMP_TIME = 0.4
 
@@ -97,9 +97,8 @@ def crv_gas_handoff(accel, gas, previous_command, gas_active, active, dt, brakin
     return 0.0, False
 
   gas_active = True
-  # A zero lookup result is the weak-request region, not a request to switch
-  # modes. Keep the active gas command continuous until braking is selected.
-  target = gas if gas > 0.0 else previous_command
+  # Follow zero effort continuously instead of retaining stale throttle.
+  target = gas
   ramp = max(1.0, 1600.0 / CRV_GAS_RAMP_TIME * dt)
   command = float(np.clip(target, previous_command - ramp, previous_command + ramp))
   return command, gas_active

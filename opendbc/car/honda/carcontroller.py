@@ -227,6 +227,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           self.stopping_counter = self.stopping_counter + 1 if stopping else 0
           crv_gas_command = None
           if self.CP.carFingerprint == CAR.HONDA_CRV_5G:
+            # Both pedals share a continuous zero-effort origin.
+            self.gas = float(np.interp(self.accel, [0.0, self.params.BOSCH_GAS_LOOKUP_BP[-1]],
+                                       self.params.BOSCH_GAS_LOOKUP_V))
             self.crv_brake_active = hondacan.crv_brake_handoff(
               self.accel, self.crv_brake_active, long_active)
             self.crv_gas_command, self.crv_gas_active = hondacan.crv_gas_handoff(
