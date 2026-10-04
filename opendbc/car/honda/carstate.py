@@ -85,6 +85,16 @@ class CarState(CarStateBase, CarStateExt):
     persist_scale(self.crv_speed_scale_params, self.crv_speed_scale, now)
     return unscaled_v_ego * control_speed_scale(unscaled_v_ego, self.crv_speed_scale.scale)
 
+  def get_raw_speed(self, v_wheel: float, v_transmission: float) -> float:
+    """Fuse the speed sources before calibration and the speed observer."""
+    # The CR-V transmission signal can rise during smooth wheel deceleration
+    # (Oct. 3 bookmark 3). Differentiating it creates a false acceleration and
+    # an emergency brake pulse. Use the four-wheel mean for the CR-V; retain
+    # the original low-speed transmission blend for every other Honda.
+    wheel_weight_low = float(self.CP.carFingerprint == CAR.HONDA_CRV_5G)
+    v_weight = float(np.interp(v_wheel, [1., 6.], [wheel_weight_low, 1.]))
+    return (1. - v_weight) * v_transmission * self.CP.wheelSpeedFactor + v_weight * v_wheel
+
   def update(self, can_parsers) -> tuple[structs.CarState, structs.CarStateSP]:
     cp = can_parsers[Bus.pt]
     cp_cam = can_parsers[Bus.cam]
@@ -93,10 +103,6 @@ class CarState(CarStateBase, CarStateExt):
 
     ret = structs.CarState()
     ret_sp = structs.CarStateSP()
-
-    # car params
-    v_weight_v = [0., 1.]  # don't trust smooth speed at low values to avoid premature zero snapping
-    v_weight_bp = [1., 6.]   # smooth blending, below ~0.6m/s the smooth speed snaps to zero
 
     # update prevs, update must run once per loop
     prev_cruise_buttons = self.cruise_buttons
@@ -111,11 +117,11 @@ class CarState(CarStateBase, CarStateExt):
 
     # ******************* parse out can *******************
 
-    # blend in transmission speed at low speed, since it has more low speed accuracy
+    # Generic Hondas blend transmission speed at low speed. CR-V ground
+    # velocity uses wheel speed; transmission excursions are not ego motion.
     # STANDSTILL->WHEELS_MOVING bit can be noisy around zero, so use XMISSION_SPEED
     v_wheel = sum([cp.vl["WHEEL_SPEEDS"][f"WHEEL_SPEED_{s}"] for s in ("FL", "FR", "RL", "RR")]) / 4.0 * CV.KPH_TO_MS
-    v_weight = float(np.interp(v_wheel, v_weight_bp, v_weight_v))
-    unscaled_v_ego = (1. - v_weight) * cp.vl["ENGINE_DATA"]["XMISSION_SPEED"] * CV.KPH_TO_MS * self.CP.wheelSpeedFactor + v_weight * v_wheel
+    unscaled_v_ego = self.get_raw_speed(v_wheel, cp.vl["ENGINE_DATA"]["XMISSION_SPEED"] * CV.KPH_TO_MS)
 
     cluster_speed = self._get_cluster_speed(cp)
     ret.vEgoRaw = self._apply_crv_speed_scale(unscaled_v_ego, cluster_speed)
