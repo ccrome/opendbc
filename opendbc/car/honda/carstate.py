@@ -4,7 +4,7 @@ import numpy as np
 from collections import defaultdict
 
 from opendbc.can import CANDefine, CANParser
-from opendbc.car import Bus, create_button_events, structs
+from opendbc.car import Bus, DT_CTRL, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.honda.hondacan import CanBus
 from opendbc.car.honda.speed_calibration import CrvSpeedScaleEstimator, control_speed_scale, load_scale, persist_scale
@@ -17,6 +17,9 @@ from opendbc.sunnypilot.car.honda.carstate_ext import CarStateExt
 
 TransmissionType = structs.CarParams.TransmissionType
 ButtonType = structs.CarState.ButtonEvent.Type
+
+CRV_SPEED_DROPOUT_MIN_SPEED = 5.0  # m/s; low-speed wheel censoring is expected
+CRV_SPEED_DROPOUT_TAKEOVER_TIME = 0.5  # seconds of fewer than two valid wheels
 
 BUTTONS_DICT = {CruiseButtons.RES_ACCEL: ButtonType.accelCruise, CruiseButtons.DECEL_SET: ButtonType.decelCruise,
                 CruiseButtons.MAIN: ButtonType.mainCruise, CruiseButtons.CANCEL: ButtonType.cancel}
@@ -62,6 +65,13 @@ class CarState(CarStateBase, CarStateExt):
     if CP.carFingerprint == CAR.HONDA_CRV_5G:
       self.crv_speed_scale_params = Params()
       self.crv_speed_scale = CrvSpeedScaleEstimator(load_scale(self.crv_speed_scale_params))
+      self.crv_speed_covariance = np.diag([0.3, 10.0])
+      self.crv_speed_initialized = False
+      self.crv_speed_measurement_valid = False
+      self.crv_wheel_count = 0
+      self.crv_speed_dropout_time = 0.
+      self.crv_high_speed_dropout_active = False
+      self.crv_speed_dropout_timeout = False
 
   def _get_cluster_speed(self, cp) -> float:
     if self.CP.carFingerprint in (CAR.HONDA_ODYSSEY_TWN,):
@@ -95,6 +105,76 @@ class CarState(CarStateBase, CarStateExt):
     v_weight = float(np.interp(v_wheel, [1., 6.], [wheel_weight_low, 1.]))
     return (1. - v_weight) * v_transmission * self.CP.wheelSpeedFactor + v_weight * v_wheel
 
+  def update_crv_speed_observer(self, wheel_speeds, cluster_speed):
+    """Fuse valid wheel channels; coast the state and grow covariance on dropout."""
+    speeds = np.asarray(wheel_speeds, dtype=float)
+    predicted_speed = max(0., float(self.v_ego_kf.x[0][0]))
+    valid = np.isfinite(speeds) & (speeds > 0.)
+    # Zero is a censored low-speed reading while motion is expected. Treat it
+    # as standstill evidence only once the independent motion prediction is
+    # already effectively at rest. This gate applies at every vehicle speed.
+    if predicted_speed <= 0.05 and np.all(np.isfinite(speeds)) and np.all(speeds == 0.):
+      valid[:] = True
+    dt = DT_CTRL
+    transition = np.array([[1., dt], [0., 1.]])
+    state = np.asarray(self.v_ego_kf.x, dtype=float).reshape(2)
+    predicted_state = transition @ state
+    predicted_state[0] = max(0., predicted_state[0])
+    # Calibrated from route-data-new: high-speed aEgo jerk RMS is 2.35 m/s^3,
+    # so acceleration uncertainty grows at the corresponding spectral rate.
+    process_covariance = np.array([[0., 0.], [0., 5.5 * dt]])
+    covariance = transition @ self.crv_speed_covariance @ transition.T + process_covariance
+    if self.crv_speed_initialized:
+      # Reject a positive but physically inconsistent channel using the
+      # observer's current uncertainty and conservative single-wheel noise.
+      # As covariance grows during dropout this gate widens accordingly.
+      innovation_limit = 4. * np.sqrt(covariance[0, 0] + 1.2)
+      valid &= np.abs(speeds - predicted_state[0]) <= innovation_limit
+    count = int(np.count_nonzero(valid))
+    self.crv_wheel_count = count
+    self.crv_speed_measurement_valid = count > 0
+    self.crv_high_speed_dropout_active = (self.crv_high_speed_dropout_active or
+                                          (count < 2 and predicted_speed >= CRV_SPEED_DROPOUT_MIN_SPEED))
+    self.crv_speed_dropout_time = (self.crv_speed_dropout_time + dt
+                                   if self.crv_high_speed_dropout_active else 0.)
+    self.crv_speed_dropout_time *= float(count < 2)
+    self.crv_high_speed_dropout_active = self.crv_high_speed_dropout_active and count < 2
+    self.crv_speed_dropout_timeout = self.crv_speed_dropout_time >= CRV_SPEED_DROPOUT_TAKEOVER_TIME
+
+    raw_measurement = predicted_state[0]
+    if count:
+      wheel_measurement = float(np.median(speeds[valid]))
+      scaled_measurement = self._apply_crv_speed_scale(wheel_measurement, cluster_speed)
+      scale = scaled_measurement / wheel_measurement if wheel_measurement > 0. else 1.
+      scatter = float(np.var(speeds[valid])) if count > 1 else 0.
+      # Wheel-mean residual against carState.vEgo is 0.014 m/s RMS above
+      # 5 m/s on route-data-new. Model the corresponding per-channel noise
+      # and increase variance for fewer channels and wheel disagreement.
+      measurement_variance = (0.0008 / count + scatter / count) * scale ** 2
+      if not self.crv_speed_initialized:
+        state = np.array([scaled_measurement, 0.])
+        covariance = np.diag([measurement_variance, 1.])
+        self.crv_speed_initialized = True
+      else:
+        innovation_variance = covariance[0, 0] + measurement_variance
+        gain = covariance[:, 0] / innovation_variance
+        innovation = scaled_measurement - predicted_state[0]
+        state = predicted_state + gain * innovation
+        observation = np.array([1., 0.])
+        residual = np.eye(2) - np.outer(gain, observation)
+        covariance = (residual @ covariance @ residual.T
+                      + measurement_variance * np.outer(gain, gain))
+      raw_measurement = scaled_measurement
+    else:
+      # No wheel measurement: use the acceleration state only for prediction.
+      # Covariance continues to grow until valid wheel data returns.
+      state = predicted_state
+
+    self.crv_speed_covariance = covariance
+    self.v_ego_kf.set_x([[float(state[0])], [float(state[1])]])
+    return (float(state[0]), float(state[1]), float(raw_measurement),
+            float(np.sqrt(max(covariance[0, 0], 0.))), float(np.sqrt(max(covariance[1, 1], 0.))))
+
   def update(self, can_parsers) -> tuple[structs.CarState, structs.CarStateSP]:
     cp = can_parsers[Bus.pt]
     cp_cam = can_parsers[Bus.cam]
@@ -117,16 +197,29 @@ class CarState(CarStateBase, CarStateExt):
 
     # ******************* parse out can *******************
 
-    # Generic Hondas blend transmission speed at low speed. CR-V ground
-    # velocity uses wheel speed; transmission excursions are not ego motion.
-    # STANDSTILL->WHEELS_MOVING bit can be noisy around zero, so use XMISSION_SPEED
-    v_wheel = sum([cp.vl["WHEEL_SPEEDS"][f"WHEEL_SPEED_{s}"] for s in ("FL", "FR", "RL", "RR")]) / 4.0 * CV.KPH_TO_MS
-    unscaled_v_ego = self.get_raw_speed(v_wheel, cp.vl["ENGINE_DATA"]["XMISSION_SPEED"] * CV.KPH_TO_MS)
-
+    # CR-V wheel channels that report zero while motion is predicted are
+    # censored, not zero-speed measurements. Other Hondas keep their blend.
+    wheel_speeds = [cp.vl["WHEEL_SPEEDS"][f"WHEEL_SPEED_{s}"] * CV.KPH_TO_MS for s in ("FL", "FR", "RL", "RR")]
+    v_transmission = cp.vl["ENGINE_DATA"]["XMISSION_SPEED"] * CV.KPH_TO_MS
     cluster_speed = self._get_cluster_speed(cp)
-    ret.vEgoRaw = self._apply_crv_speed_scale(unscaled_v_ego, cluster_speed)
-    ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
-    ret.standstill = cp.vl["ENGINE_DATA"]["XMISSION_SPEED"] < 1e-5
+    if self.crv_speed_scale is not None:
+      ret.vEgo, ret.aEgo, ret.vEgoRaw, ret.vEgoStd, ret.aEgoStd = self.update_crv_speed_observer(wheel_speeds, cluster_speed)
+      ret.vEgoMeasurementValid = self.crv_speed_measurement_valid
+      ret.vEgoWheelCount = self.crv_wheel_count
+      ret.vEgoDropoutTime = self.crv_speed_dropout_time
+      ret.vehicleSensorsInvalid = self.crv_speed_dropout_timeout
+      ret.standstill = (v_transmission < 1e-5 and np.all(np.asarray(wheel_speeds) == 0.) and ret.vEgo < 0.05)
+    else:
+      v_wheel = sum(wheel_speeds) / 4.0
+      unscaled_v_ego = self.get_raw_speed(v_wheel, v_transmission)
+      ret.vEgoRaw = unscaled_v_ego
+      ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
+      ret.vEgoStd = 0.
+      ret.aEgoStd = 0.
+      ret.vEgoMeasurementValid = True
+      ret.vEgoWheelCount = 4
+      ret.vEgoDropoutTime = 0.
+      ret.standstill = cp.vl["ENGINE_DATA"]["XMISSION_SPEED"] < 1e-5
 
     # doorOpen is true if we can find any door open, but signal locations vary, and we may only see the driver's door
     # TODO: Test the eight Nidec cars without SCM signals for driver's door state, may be able to consolidate further

@@ -3,7 +3,7 @@ import unittest
 from opendbc.can import CANPacker, CANParser
 from opendbc.car import Bus
 from opendbc.car.honda.carcontroller import longitudinal_control_allowed
-from opendbc.car.honda.hondacan import CanBus, create_acc_commands, crv_brake_handoff, crv_gas_handoff
+from opendbc.car.honda.hondacan import CanBus, create_acc_commands, crv_brake_handoff, crv_coast_accel, crv_gas_handoff
 from opendbc.car.honda.interface import CarInterface
 from opendbc.car.honda.values import CAR, DBC, HondaFlags
 
@@ -88,11 +88,17 @@ class TestHondaFingerprint(unittest.TestCase):
     assert command == 0.0
     assert not gas_active
 
-  def test_crv_brake_handoff_uses_continuous_effort_origin(self):
+  def test_crv_brake_handoff_tracks_coast_acceleration(self):
     assert crv_brake_handoff(-0.21, False, True)
     assert crv_brake_handoff(-0.01, True, True)
-    assert crv_brake_handoff(0.03, True, True) is False
+    assert crv_brake_handoff(0.06, True, True) is False
     assert crv_brake_handoff(-0.01, False, True)
+    downhill_coast = crv_coast_accel(20.0, -0.1)
+    assert downhill_coast > 0.0
+    assert crv_brake_handoff(0.18, False, True, downhill_coast)
+    assert crv_brake_handoff(downhill_coast + 0.01, True, True, downhill_coast)
+    assert not crv_brake_handoff(downhill_coast + 0.06, True, True, downhill_coast)
+    assert not crv_brake_handoff(0.0, True, False, downhill_coast)
 
   def test_crv_zero_effort_releases_stale_gas(self):
     command = 800.0

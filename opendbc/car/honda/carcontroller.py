@@ -227,11 +227,16 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
           self.stopping_counter = self.stopping_counter + 1 if stopping else 0
           crv_gas_command = None
           if self.CP.carFingerprint == CAR.HONDA_CRV_5G:
-            # Both pedals share a continuous zero-effort origin.
-            self.gas = float(np.interp(self.accel, [0.0, self.params.BOSCH_GAS_LOOKUP_BP[-1]],
+            pitch = CC.orientationNED[1] if len(CC.orientationNED) == 3 else 0.0
+            coast_accel = hondacan.crv_coast_accel(CS.out.vEgo, pitch)
+            # Downhill gravity can provide positive acceleration while the
+            # brake remains requested. Gas supplies only the residual above
+            # that free-coast acceleration; level/uphill mapping is unchanged.
+            gas_effort = self.accel - max(0.0, coast_accel)
+            self.gas = float(np.interp(gas_effort, [0.0, self.params.BOSCH_GAS_LOOKUP_BP[-1]],
                                        self.params.BOSCH_GAS_LOOKUP_V))
             self.crv_brake_active = hondacan.crv_brake_handoff(
-              self.accel, self.crv_brake_active, long_active)
+              self.accel, self.crv_brake_active, long_active, coast_accel)
             self.crv_gas_command, self.crv_gas_active = hondacan.crv_gas_handoff(
               self.accel, self.gas, self.crv_gas_command, self.crv_gas_active,
               long_active, DT_CTRL * 2, self.crv_brake_active)

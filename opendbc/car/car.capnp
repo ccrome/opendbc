@@ -164,11 +164,16 @@ struct CarState {
   # car speed
   vEgo @1 :Float32;            # best estimate of speed
   aEgo @16 :Float32;           # best estimate of aCAN cceleration
-  vEgoRaw @17 :Float32;        # unfiltered speed from wheel speed sensors
+  vEgoRaw @17 :Float32;        # robust wheel measurement, or observer prediction during dropout
   vEgoCluster @44 :Float32;    # best estimate of speed shown on car's instrument cluster, used for UI
 
   vCruise @53 :Float32;        # actual set speed
   vCruiseCluster @54 :Float32; # set speed to display in the UI
+  vEgoStd @62 :Float32; # Honda CR-V speed estimate standard deviation in m/s
+  aEgoStd @63 :Float32; # Honda CR-V acceleration estimate standard deviation in m/s^2
+  vEgoMeasurementValid @64 :Bool; # at least one wheel channel updated this estimate
+  vEgoWheelCount @65 :UInt8; # valid Honda CR-V wheel channels this sample
+  vEgoDropoutTime @66 :Float32; # high-speed interval with fewer than two valid wheel channels
 
   yawRate @22 :Float32;     # best estimate of yaw rate
   standstill @18 :Bool;

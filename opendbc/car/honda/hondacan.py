@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 
 from opendbc.car import CanBusBase
@@ -7,8 +9,19 @@ from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 
 
 CRV_GAS_BRAKE_ACCEL = 0.0
-CRV_BRAKE_RELEASE_ACCEL = 0.0
+# One global neutral-effort band; the controller keeps a brake request until
+# acceleration demand clearly exceeds free coasting. This avoids a mode flip
+# from quantized observer motion without adding a speed-specific deadband.
+CRV_BRAKE_RELEASE_ACCEL = 0.05
 CRV_GAS_RAMP_TIME = 0.4
+# Whole-drive CAN-input identification used by the CR-V longitudinal plant.
+# Coast acceleration is positive downhill and negative on level/uphill roads.
+CRV_COAST_ROLLING_ACCEL = 0.1888
+CRV_COAST_DRAG_COEFFICIENT = 0.0003693
+
+
+def crv_coast_accel(speed, pitch):
+  return -9.81 * math.sin(pitch) - CRV_COAST_ROLLING_ACCEL - CRV_COAST_DRAG_COEFFICIENT * speed ** 2
 
 # CAN bus layout with relay
 # 0 = ACC-CAN - radar side
@@ -83,11 +96,11 @@ def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_ca
   return packer.make_can_msg("BRAKE_COMMAND", CAN.pt, values)
 
 
-def crv_brake_handoff(accel, previous_brake, active):
-  """Prevent small request noise from repeatedly changing gas/brake mode."""
+def crv_brake_handoff(accel, previous_brake, active, coast_accel=0.0):
+  """Brake when the requested acceleration is below free coasting."""
   if not active:
     return False
-  threshold = CRV_BRAKE_RELEASE_ACCEL if previous_brake else CRV_GAS_BRAKE_ACCEL
+  threshold = max(0.0, coast_accel) + (CRV_BRAKE_RELEASE_ACCEL if previous_brake else CRV_GAS_BRAKE_ACCEL)
   return accel < threshold
 
 
