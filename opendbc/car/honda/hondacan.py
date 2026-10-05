@@ -9,9 +9,7 @@ from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP
 
 
 CRV_GAS_BRAKE_ACCEL = 0.0
-# One global neutral-effort band; the controller keeps a brake request until
-# acceleration demand clearly exceeds free coasting. This avoids a mode flip
-# from quantized observer motion without adding a speed-specific deadband.
+# Keep the brake request through a small neutral-effort band.
 CRV_BRAKE_RELEASE_ACCEL = 0.05
 CRV_GAS_RAMP_TIME = 0.4
 # Whole-drive CAN-input identification used by the CR-V longitudinal plant.
@@ -96,12 +94,12 @@ def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_ca
   return packer.make_can_msg("BRAKE_COMMAND", CAN.pt, values)
 
 
-def crv_brake_handoff(accel, previous_brake, active, coast_accel=0.0):
-  """Brake when the requested acceleration is below free coasting."""
+def crv_brake_handoff(accel, previous_brake, active, coast_accel=0.0, committed_stop=False):
+  """Brake below free-coast demand and preserve braking through a committed stop."""
   if not active:
     return False
   threshold = max(0.0, coast_accel) + (CRV_BRAKE_RELEASE_ACCEL if previous_brake else CRV_GAS_BRAKE_ACCEL)
-  return accel < threshold
+  return accel < threshold or committed_stop
 
 
 def crv_gas_handoff(accel, gas, previous_command, gas_active, active, dt, braking=False):

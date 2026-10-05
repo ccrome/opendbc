@@ -382,6 +382,7 @@ struct CarControl {
     brake @1: Float32; # [0.0, 1.0]
     torqueOutputCan @8: Float32;   # value sent over can to the car
     speed @6: Float32;  # m/s
+    crvStopActive @9: Bool;  # preserve the CR-V brake request through a committed stop
 
     enum LongControlState @0xe40f3a917d908282{
       off @0;

@@ -236,7 +236,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
             self.gas = float(np.interp(gas_effort, [0.0, self.params.BOSCH_GAS_LOOKUP_BP[-1]],
                                        self.params.BOSCH_GAS_LOOKUP_V))
             self.crv_brake_active = hondacan.crv_brake_handoff(
-              self.accel, self.crv_brake_active, long_active, coast_accel)
+              self.accel, self.crv_brake_active, long_active, coast_accel, CC.actuators.crvStopActive)
             self.crv_gas_command, self.crv_gas_active = hondacan.crv_gas_handoff(
               self.accel, self.gas, self.crv_gas_command, self.crv_gas_active,
               long_active, DT_CTRL * 2, self.crv_brake_active)

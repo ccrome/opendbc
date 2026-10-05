@@ -62,6 +62,12 @@ class TestHondaFingerprint(unittest.TestCase):
       assert parser.vl['ACC_CONTROL']['BRAKE_REQUEST'] == 0
       assert parser.vl['ACC_CONTROL']['GAS_COMMAND'] == -30000.0
 
+    messages = create_acc_commands(packer, can, True, True, 0.04, 100.0, 0, cp,
+                                   gas_command=-30000.0, brake_active=True)
+    parser.update([(1_000_000_001, messages)])
+    assert parser.vl['ACC_CONTROL']['BRAKE_REQUEST'] == 1
+    assert parser.vl['ACC_CONTROL']['GAS_COMMAND'] == -30000.0
+
     messages = create_acc_commands(packer, can, True, True, 0.06, 100.0, 0, cp)
     parser.update([(1_000_000_001, messages)])
     assert parser.vl['ACC_CONTROL']['BRAKE_REQUEST'] == 0
@@ -91,8 +97,11 @@ class TestHondaFingerprint(unittest.TestCase):
   def test_crv_brake_handoff_tracks_coast_acceleration(self):
     assert crv_brake_handoff(-0.21, False, True)
     assert crv_brake_handoff(-0.01, True, True)
-    assert crv_brake_handoff(0.06, True, True) is False
+    assert not crv_brake_handoff(0.04, False, True)
+    assert crv_brake_handoff(0.04, True, True)
+    assert not crv_brake_handoff(0.06, True, True)
     assert crv_brake_handoff(-0.01, False, True)
+    assert crv_brake_handoff(0.04, False, True, committed_stop=True)
     downhill_coast = crv_coast_accel(20.0, -0.1)
     assert downhill_coast > 0.0
     assert crv_brake_handoff(0.18, False, True, downhill_coast)
